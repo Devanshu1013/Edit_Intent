@@ -1,10 +1,10 @@
-# 🧠 Edit Intent Classification using Large Language Models
+# Edit Intent Classification using Large Language Models
 
 This project focuses on classifying the intent behind text edits using Large Language Models (LLMs). Given an original sentence and its edited version, the goal is to identify the purpose of the edit.
 
 ---
 
-## 📌 Problem Statement
+## Problem Statement
 
 Edit intent classification aims to determine why a piece of text was modified. The model predicts one of the following labels:
 
@@ -16,7 +16,7 @@ Edit intent classification aims to determine why a piece of text was modified. T
 
 ---
 
-## 🚀 Project Overview
+## Project Overview
 
 In this project, we implement and compare four different LLM-based approaches:
 
@@ -29,7 +29,7 @@ In this project, we implement and compare four different LLM-based approaches:
 
 ---
 
-## ⚙️ Methodology
+## Methodology
 
 The system follows a unified pipeline:
 
@@ -44,7 +44,7 @@ We compare:
 
 ---
 
-## 📊 Results
+## Results
 
 - Fine-tuned models outperform generative approaches  
 - SEQC, SNET, and XNET achieve higher accuracy and F1-score  
@@ -52,7 +52,7 @@ We compare:
 
 ---
 
-## 📈 Evaluation Metrics
+## Evaluation Metrics
 
 We evaluate models using:
 - Accuracy  
@@ -63,7 +63,7 @@ We evaluate models using:
 
 ---
 
-## 🧪 Sample Prediction
+## Sample Prediction
 
 ```python
 Source: "The sentence has many grammar mistake."
@@ -78,7 +78,7 @@ XNET → Grammar
 
 ---
 
-## 🚀 How to Run the Project
+##  How to Run the Project
 
 ### Step 1: Clone the Repository
 
@@ -127,6 +127,6 @@ Open `Edit_Intent.ipynb` and run all cells.
 
 ---
 
-## 👤 Author
+## Author
 
 Devanshu Prajapati
