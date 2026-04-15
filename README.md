@@ -125,8 +125,3 @@ python infer_xnet.py
 
 Open `Edit_Intent.ipynb` and run all cells.
 
----
-
-## Author
-
-Devanshu Prajapati
