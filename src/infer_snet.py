@@ -1,107 +1,200 @@
 import os
-import pandas as pd
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
+import torch.nn as nn
+import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-
-MODEL_PATH = os.path.join(PROJECT_ROOT, "model", "snet_final_model")
-TEST_PATH = os.path.join(PROJECT_ROOT, "data", "test.csv")
+from transformers import AutoTokenizer, AutoModel
+from safetensors.torch import load_file
+from sklearn.metrics import classification_report, accuracy_score
 
 
-def safe_text(x):
-    if pd.isna(x):
-        return ""
-    return str(x).strip()
+# =========================================================
+# PATH SETUP
+# =========================================================
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+MODEL_DIR = os.path.join(BASE_DIR, "model", "snet_final_model")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+TEST_FILE = os.path.join(DATA_DIR, "test.csv")
+
+MODEL_NAME = "roberta-base"
+MAX_LENGTH = 128
 
 
-def build_input_text(text_src, text_tgt=""):
-    src = safe_text(text_src)
-    tgt = safe_text(text_tgt)
-    return f"Source: {src} [SEP] Edited: {tgt}"
+# =========================================================
+# DEVICE
+# =========================================================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
 
 
-def load_model():
-    print("MODEL_PATH:", MODEL_PATH)
-    print("TEST_PATH:", TEST_PATH)
+# =========================================================
+# LOAD LABELS
+# =========================================================
+train_df = pd.read_csv(os.path.join(DATA_DIR, "train.csv"))
 
-    if not os.path.isdir(MODEL_PATH):
-        raise FileNotFoundError(f"Model folder not found: {MODEL_PATH}")
+labels = sorted(train_df["label"].unique())
+label2id = {label: idx for idx, label in enumerate(labels)}
+id2label = {idx: label for label, idx in label2id.items()}
 
-    if not os.path.isfile(TEST_PATH):
-        raise FileNotFoundError(f"Test file not found: {TEST_PATH}")
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH, local_files_only=True)
-
-    id2label = model.config.id2label
-    if isinstance(list(id2label.keys())[0], str):
-        id2label = {int(k): v for k, v in id2label.items()}
-
-    return tokenizer, model, id2label
+print("Label Mapping:", label2id)
 
 
-def predict_snet_edit_intent(model, tokenizer, id2label, text_src, text_tgt=""):
-    input_text = build_input_text(text_src, text_tgt)
+# =========================================================
+# ✅ SNET MODEL (MATCHES TRAINING)
+# =========================================================
+class SNet(nn.Module):
+    def __init__(self, model_name, num_labels):
+        super().__init__()
 
-    inputs = tokenizer(
-        input_text,
-        return_tensors="pt",
-        truncation=True,
+        self.encoder = AutoModel.from_pretrained(model_name)
+        hidden = self.encoder.config.hidden_size  # 768
+
+        # EXACT MATCH WITH YOUR CHECKPOINT
+        self.fc1 = nn.Linear(hidden * 3, hidden)   # 2304 → 768
+        self.norm1 = nn.LayerNorm(hidden)
+
+        self.fc2 = nn.Linear(hidden, 384)          # 768 → 384
+        self.norm2 = nn.LayerNorm(384)
+
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(384, num_labels)
+
+        self.act = nn.ReLU()
+
+    def forward(self, input_ids=None, attention_mask=None):
+        outputs = self.encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+
+        hidden_states = outputs.last_hidden_state
+        batch_size = input_ids.size(0)
+
+        # RoBERTa </s> token id
+        sep_token_id = 2
+        sep_positions = (input_ids == sep_token_id).nonzero(as_tuple=False)
+
+        o_list = []
+        n_list = []
+
+        for i in range(batch_size):
+            positions = sep_positions[sep_positions[:, 0] == i][:, 1]
+
+            if len(positions) < 2:
+                raise ValueError("Separator tokens not found")
+
+            src_end = positions[0]
+            tgt_end = positions[1]
+
+            o = hidden_states[i, src_end - 1, :]
+            n = hidden_states[i, tgt_end - 1, :]
+
+            o_list.append(o)
+            n_list.append(n)
+
+        o = torch.stack(o_list)
+        n = torch.stack(n_list)
+
+        # ✅ CRITICAL LINE (MATCHES TRAINING)
+        interaction = torch.cat([o, n, o - n], dim=1)  # 2304
+
+        x = self.fc1(interaction)
+        x = self.norm1(x)
+        x = self.act(x)
+
+        x = self.fc2(x)
+        x = self.norm2(x)
+        x = self.act(x)
+
+        x = self.dropout(x)
+
+        logits = self.classifier(x)
+        return logits
+
+
+# =========================================================
+# LOAD MODEL
+# =========================================================
+tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+
+model = SNet(MODEL_NAME, len(labels))
+
+state_dict = load_file(os.path.join(MODEL_DIR, "model.safetensors"))
+
+model.load_state_dict(state_dict)  # STRICT MATCH
+model.to(device)
+model.eval()
+
+print("SNET Model Loaded Successfully")
+
+
+# =========================================================
+# PREDICTION FUNCTION
+# =========================================================
+def predict(src_text, tgt_text):
+    enc = tokenizer(
+        str(src_text),
+        str(tgt_text),
         padding="max_length",
-        max_length=128
+        truncation=True,
+        max_length=MAX_LENGTH,
+        return_tensors="pt"
     )
 
-    model.eval()
+    enc = {k: v.to(device) for k, v in enc.items()}
+
     with torch.no_grad():
-        outputs = model(**inputs)
-        pred_id = torch.argmax(outputs.logits, dim=1).item()
+        logits = model(**enc)
+        probs = torch.softmax(logits, dim=1)
+        pred_id = torch.argmax(probs, dim=1).item()
 
-    return id2label[pred_id]
+    return pred_id
 
 
-def evaluate_model(model, tokenizer, id2label):
-    test_df = pd.read_csv(TEST_PATH)
+# =========================================================
+# TEST EVALUATION
+# =========================================================
+test_df = pd.read_csv(TEST_FILE)
 
-    predictions = []
-    true_labels = test_df["label"].tolist()
-    label_list = list(id2label.values())
+y_true = []
+y_pred = []
 
-    for _, row in test_df.iterrows():
-        pred = predict_snet_edit_intent(model, tokenizer, id2label, row["text_src"], row["text_tgt"])
-        predictions.append(pred)
+for _, row in test_df.iterrows():
+    src = row["text_src"]
+    tgt = row["text_tgt"]
 
-    accuracy = accuracy_score(true_labels, predictions)
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        true_labels, predictions, average="weighted", zero_division=0
+    pred = predict(src, tgt)
+
+    y_pred.append(pred)
+    y_true.append(label2id[row["label"]])
+
+
+# =========================================================
+# METRICS
+# =========================================================
+print("\n========== RESULTS ==========")
+print("Accuracy:", accuracy_score(y_true, y_pred))
+
+print("\nClassification Report:\n")
+print(
+    classification_report(
+        y_true,
+        y_pred,
+        target_names=[id2label[i] for i in range(len(labels))]
     )
-
-    print("\nSNET Test Results")
-    print("Accuracy:", accuracy)
-    print("Precision:", precision)
-    print("Recall:", recall)
-    print("F1:", f1)
-
-    print("\nClassification Report:")
-    print(classification_report(true_labels, predictions, labels=label_list, zero_division=0))
-
-    print("\nConfusion Matrix:")
-    cm = confusion_matrix(true_labels, predictions, labels=label_list)
-    cm_df = pd.DataFrame(cm, index=label_list, columns=label_list)
-    print(cm_df)
+)
 
 
-if __name__ == "__main__":
-    tokenizer, model, id2label = load_model()
-    print("\nSNET model loaded successfully.\n")
 
-    example_src = "He dont knows driving car."
-    example_tgt = "He doesn't know how to drive a car."
+# SAMPLE TEST
 
-    pred = predict_snet_edit_intent(model, tokenizer, id2label, example_src, example_tgt)
-    print("Sample Prediction:", pred)
+print("\n========== SAMPLE PREDICTION ==========")
 
-    print("\nRunning full evaluation...\n")
-    evaluate_model(model, tokenizer, id2label)
+example_src = "The experiment shows better results in recent trials."
+example_tgt = "The experiment shows results."
+
+pred_id = predict(example_src, example_tgt)
+
+print("Prediction:", id2label[pred_id])
