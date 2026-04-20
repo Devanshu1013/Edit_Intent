@@ -8,9 +8,6 @@ from safetensors.torch import load_file
 from sklearn.metrics import classification_report, accuracy_score
 
 
-# =========================================================
-# PATH SETUP
-# =========================================================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 MODEL_DIR = os.path.join(BASE_DIR, "model", "snet_final_model")
@@ -21,19 +18,11 @@ TEST_FILE = os.path.join(DATA_DIR, "test.csv")
 MODEL_NAME = "roberta-base"
 MAX_LENGTH = 128
 
-
-# =========================================================
-# DEVICE
-# =========================================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 
-# =========================================================
-# LOAD LABELS
-# =========================================================
 train_df = pd.read_csv(os.path.join(DATA_DIR, "train.csv"))
-
 labels = sorted(train_df["label"].unique())
 label2id = {label: idx for idx, label in enumerate(labels)}
 id2label = {idx: label for label, idx in label2id.items()}
@@ -41,21 +30,21 @@ id2label = {idx: label for label, idx in label2id.items()}
 print("Label Mapping:", label2id)
 
 
-# =========================================================
-# ✅ SNET MODEL (MATCHES TRAINING)
-# =========================================================
+
+# SNET MODEL 
+
 class SNet(nn.Module):
     def __init__(self, model_name, num_labels):
         super().__init__()
 
         self.encoder = AutoModel.from_pretrained(model_name)
-        hidden = self.encoder.config.hidden_size  # 768
+        hidden = self.encoder.config.hidden_size  
 
         # EXACT MATCH WITH YOUR CHECKPOINT
-        self.fc1 = nn.Linear(hidden * 3, hidden)   # 2304 → 768
+        self.fc1 = nn.Linear(hidden * 3, hidden)  
         self.norm1 = nn.LayerNorm(hidden)
 
-        self.fc2 = nn.Linear(hidden, 384)          # 768 → 384
+        self.fc2 = nn.Linear(hidden, 384)          
         self.norm2 = nn.LayerNorm(384)
 
         self.dropout = nn.Dropout(0.1)
@@ -96,8 +85,6 @@ class SNet(nn.Module):
 
         o = torch.stack(o_list)
         n = torch.stack(n_list)
-
-        # ✅ CRITICAL LINE (MATCHES TRAINING)
         interaction = torch.cat([o, n, o - n], dim=1)  # 2304
 
         x = self.fc1(interaction)
@@ -114,25 +101,20 @@ class SNet(nn.Module):
         return logits
 
 
-# =========================================================
+
 # LOAD MODEL
-# =========================================================
 tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-
 model = SNet(MODEL_NAME, len(labels))
-
 state_dict = load_file(os.path.join(MODEL_DIR, "model.safetensors"))
 
-model.load_state_dict(state_dict)  # STRICT MATCH
+model.load_state_dict(state_dict)  
 model.to(device)
 model.eval()
 
 print("SNET Model Loaded Successfully")
 
 
-# =========================================================
-# PREDICTION FUNCTION
-# =========================================================
+
 def predict(src_text, tgt_text):
     enc = tokenizer(
         str(src_text),
@@ -153,14 +135,11 @@ def predict(src_text, tgt_text):
     return pred_id
 
 
-# =========================================================
-# TEST EVALUATION
-# =========================================================
-test_df = pd.read_csv(TEST_FILE)
 
+# TEST EVALUATION
+test_df = pd.read_csv(TEST_FILE)
 y_true = []
 y_pred = []
-
 for _, row in test_df.iterrows():
     src = row["text_src"]
     tgt = row["text_tgt"]
@@ -171,12 +150,10 @@ for _, row in test_df.iterrows():
     y_true.append(label2id[row["label"]])
 
 
-# =========================================================
-# METRICS
-# =========================================================
-print("\n========== RESULTS ==========")
-print("Accuracy:", accuracy_score(y_true, y_pred))
 
+# METRICS
+print("\nRESULTS")
+print("Accuracy:", accuracy_score(y_true, y_pred))
 print("\nClassification Report:\n")
 print(
     classification_report(
@@ -188,13 +165,8 @@ print(
 
 
 
-# SAMPLE TEST
-
-print("\n========== SAMPLE PREDICTION ==========")
-
+print("\nPREDICTION")
 example_src = "The experiment shows better results in recent trials."
 example_tgt = "The experiment shows results."
-
 pred_id = predict(example_src, example_tgt)
-
 print("Prediction:", id2label[pred_id])
